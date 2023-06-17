@@ -1,0 +1,797 @@
+---
+title: |
+  GE 461 INTRODUCTION TO DATA SCIENCE \
+  Analysis of Data Stream Classification Models on Different Datasets
+# title: |
+pagetitle: 
+papersize: a4paper
+author: Yagiz Yaman
+always_allow_html: true
+linkcolor: red
+output: 
+  bookdown::pdf_document2:
+    number_sections: false
+  bookdown::html_document2:
+    theme: readable
+    number_sections: false
+    code_folding: "hide"
+    toc: true
+link-citations: yes
+---
+
+```{r Install Packages, include=FALSE}
+library(knitr)
+library(kableExtra)
+library(pander)
+
+opts_chunk$set(echo = TRUE)
+
+options(knitr.kable.NA =".") 
+kable_format <-  if (is_html_output()) "html" else "latex"
+```
+
+
+```{r, include = FALSE}
+library(reticulate)
+use_python("C:/Users/yagiz/Desktop/4-2/GE-461/DataStream/the.venv/Scripts/python.exe")
+```
+
+In this project, multiple data stream classification models are applied on different datasets and the effect of concept drifts and the overall results are discussed.
+
+```{python, include = FALSE}
+import os
+import sys
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import time
+np.set_printoptions(suppress=True)
+from skmultiflow.data import AGRAWALGenerator, SEAGenerator
+from skmultiflow.trees import HoeffdingTreeClassifier
+from skmultiflow.drift_detection import DDM
+from skmultiflow.meta import AdaptiveRandomForestClassifier
+from skmultiflow.meta import StreamingRandomPatchesClassifier
+from skmultiflow.meta import DynamicWeightedMajorityClassifier
+from skmultiflow.lazy import SAMKNNClassifier
+from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score
+```
+
+# OPTIONAL 1
+
+## Question
+
+ As an optional part, at the beginning of your report, you may have a related works section that covers
+data stream mining briefly with proper references.
+
+## Answer
+
+With the advance in hardware and software systems, it becomes possible to process data which generated in high-speed due to an increase in the usage of technological devices and population. The term *data streams* is used to represent this rapidly generated data, for example, credit card transactions or phone calls in a city [1]. There are certain characteristics of *data streams* that differentiate it from static datasets: 
+
+- Potentially infinite number of observations,
+
+- High rate of data arrival,
+
+- Potential changes (concept drift) in data distribution during data stream process [3].
+
+So, a data stream mining algorithms should process the vast incoming data and update its parameters to adapt to the changes as fast as possible [3]. Instance based classifiers, neural networks, Bayesian classifiers, and decision trees are standard machine learning methods for classifying data streams. Also, ensemble methods are quite promising to deal with a concept drift [3].
+
+```{python, echo = FALSE}
+spam = pd.read_csv("C:/Users/yagiz/Desktop/4-2/GE-461/DataStream/Datasets/spam.csv")
+
+electric = pd.read_csv("C:/Users/yagiz/Desktop/4-2/GE-461/DataStream/Datasets/elec.csv")
+
+agrawal_dt = pd.read_csv("C:/Users/yagiz/Desktop/4-2/GE-461/DataStream/datasets/agrawal_dt.csv")
+
+sead_dt = pd.read_csv("C:/Users/yagiz/Desktop/4-2/GE-461/DataStream/datasets/sead_dt.csv")
+
+X_agrawal = agrawal_dt.drop(columns=["Y"]).values
+y_agrawal = agrawal_dt["Y"].values
+
+X_sead = sead_dt.drop(columns=["Y"]).values
+y_sead = sead_dt["Y"].values
+
+X_electric = electric.drop(columns=["target"]).values
+y_electric = electric["target"].values
+
+X_spam = spam.drop(columns=["target"]).values
+y_spam = spam["target"].values
+```
+
+
+
+# PART 4.1 - 4.2
+
+
+The following classification models,
+
+- Adaptive Random Forest (ARF) 
+
+- Streaming Agnostic Model with k-Nearest Neighbors (SAM-kNN) 
+
+- Streaming Random Patches (SRP) 
+
+-  Dynamic Weighted Majority (DWM) 
+
+are applied on datasets,
+
+- electric, 
+
+- spam,
+
+- agrawal,
+
+- sead.
+
+The run times and accuracies are provided. 
+
+DDM is used for a concept drift detection algorithm. The reason is it is good at capturing gradual changes. As the provided datasets do not have sudden changes, it works well. 
+
+The Interleaved Test-Then-Train approach is developed. As an evaluation metric, prediction accuracy is provided. Also, prequential accuracy plot is presented.
+
+```{python, echo = FALSE}
+def stream_classifer(X, y, Classifier, Method, Dataset, Number):
+  
+    start=time.time()
+
+    classifier = Classifier
+    
+    # Initialize the DDM concept drift detector
+    ddm = DDM()
+    #adwin = ADWIN(delta=0.01)
+
+    result = np.array([])
+    prediction = np.array([])
+   
+    for i in range(len(X)):
+
+        # Predict using the model -> test
+        y_pred = classifier.predict(X[i].reshape(1, -1))
+
+        # check if the prediction is correct
+        if y[i] == y_pred:
+            result = np.append(result, 1)
+        else:
+            result = np.append(result, 0)
+            
+        prediction = np.append(prediction, y_pred)
+            
+        # Update the model -> train
+        classifier.partial_fit(X[i].reshape(1, -1), y[i].reshape(1,))
+
+        # Update the concept drift detector
+        ddm.add_element(y[i])
+
+        # Check if concept drift detected. If yes reset the model's parameters.
+        if ddm.detected_change():
+            classifier = Classifier
+
+    accuracy = round(100*(np.sum(result)/len(result)), 2)
+    
+    my_dt = pd.DataFrame(result, columns=["result"])
+    my_dt["index"] = my_dt.index
+
+    num_window = len(my_dt)//20
+
+    my_windows = []
+    for i in range(0, len(my_dt), num_window):
+        my_windows.append(i)
+
+    my_windows = my_windows[:-1]
+
+    my_dt["window"] = 0
+
+    for i in range(len(my_windows)):
+        my_dt.loc[my_dt['index'] >= my_windows[i], 'window'] = i+1
+
+    plotter = my_dt.groupby("window")["result"].mean().reset_index()
+    
+    end=time.time() 
+    
+    run_time = round(end-start)
+
+    plt.clf()
+    fig, ax = plt.subplots(figsize=((5,5)))
+    ax.plot(plotter["window"], plotter["result"],
+    marker="v"
+    , linestyle="--"
+    , color="r")
+
+
+    ax.set_xticks(range(1,(1+len(plotter["window"]))))
+    ax.set_xticklabels(plotter["window"])
+    
+    ax.set_xlabel("Window number")
+    ax.set_ylabel("Accuracy")
+    ax.set_title(Number + "Accuracy per Window for " + Method + " on " + Dataset)
+    
+    plt.show()
+    
+    return(accuracy, run_time, result, prediction)
+```
+
+## For electric dataset
+
+### Adaptive Random Forest (ARF)
+
+```{python, echo = FALSE}
+arf = AdaptiveRandomForestClassifier(random_state=1, n_estimators=5)
+arf_el = stream_classifer(X_electric, y_electric, arf, "ARF", "Electric", "(1) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(arf_el[0]) + "%" + "\n Run Time (sec) =  " + str(arf_el[1]))
+```
+
+As **Table (1)** represents, the accuracy drops at specific points. The reason would be concept drifts. The ARF method achieves %85.65 overall accuracy. Its run time is 401 seconds which is relatively high compared to other methods. 
+
+### Streaming Agnostic Model with k-Nearest Neighbors (SAM-kNN)
+
+```{python, echo = FALSE}
+samknn = SAMKNNClassifier()
+sam_el = stream_classifer(X_electric, y_electric, samknn, "SAM-kNN", "Electric", "(2) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(sam_el[0])  + "%" + "\n Run Time (sec) =  " + str(sam_el[1]))
+```
+
+**Table (2)** shows multiple concept drifts in the dataset. It is seen that ARF and SAM-kNN can catch different concept drifts as drops do not occur in the same intervals. The overall accuracy of SAMkNN is less than AFR, which is %85.65. Its run time is only 55 seconds, which is less than the AFR method.
+
+### Streaming Random Patches (SRP)
+
+
+```{python, echo = FALSE}
+srp = StreamingRandomPatchesClassifier(random_state=1, disable_drift_detection=True, n_estimators = 5)
+srp_el = stream_classifer(X_electric, y_electric, srp, "SRP", "Electric", "(3) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(srp_el[0])  + "%" + "\n Run Time (sec) =  " + str(srp_el[1]))
+```
+
+There are similarities when we analyze the prequential accuracy plots of SRP and AFR. The accuracy drops around the same windows. So, these two methods are similar in responding to concept drifts. The overall accuracy is in the middle of AFR and SAMkNN, which is %81.79. Also, its run time is in between the AFR and SAMkNN, which is 259 seconds.
+
+### Dynamic Weighted Majority (DWM)
+
+```{python, echo = FALSE}
+dwm = DynamicWeightedMajorityClassifier(base_estimator=HoeffdingTreeClassifier(), n_estimators = 5)
+dwm_el = stream_classifer(X_electric, y_electric, dwm, "DWM", "Electric", "(4) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(dwm_el[0]) +  "%" + "\n Run Time (sec) =  " + str(dwm_el[1]))
+```
+
+Table (4) looks similar to Table (2) in drops. There are steep reductions in accuracy from window to window. The overall accuracy is %82.74, and the run time is 63 seconds.
+
+### Ensemble Method
+
+```{python, echo = FALSE}
+data = {"samknn": sam_el[3], "arf": arf_el[3], "srp": srp_el[3], "dwm": dwm_el[3]}
+
+ensemble_electric = pd.DataFrame(data)
+
+most_occurings = ensemble_electric.mode(axis=1)
+ensemble_electric["ensemble"] = most_occurings[0]
+
+ensemble_electric["index"] = ensemble_electric.index
+
+ensemble_electric["target"] = y_electric
+ensemble_electric["result"] = 0
+ensemble_electric.loc[ensemble_electric["ensemble"] == ensemble_electric["target"], "result"] = 1
+
+pred_ens_el = ensemble_electric["ensemble"].to_numpy()
+
+num_window = len(ensemble_electric)//20
+
+my_windows = []
+for i in range(0, len(ensemble_electric), num_window):
+    my_windows.append(i)
+
+my_windows = my_windows[:-1]
+
+ensemble_electric["window"] = 0
+
+for i in range(len(my_windows)):
+    ensemble_electric.loc[ensemble_electric['index'] >= my_windows[i], 'window'] = i+1
+
+plotter = ensemble_electric.groupby("window")["result"].mean().reset_index()
+
+plt.clf()
+fig, ax = plt.subplots(figsize=((5,5)))
+ax.plot(plotter["window"], plotter["result"],
+marker="v"
+, linestyle="--"
+, color="r")
+
+
+ax.set_xticks(range(1,(1+len(plotter["result"]))))
+#ax.set_xticklabels(plotter["ensemble"])
+
+ax.set_xlabel("Window number")
+ax.set_ylabel("Accuracy")
+ax.set_title("(5) Accuracy per Window for Ensemble Method on Electric Dataset")
+
+plt.show()
+```
+
+
+```{python, echo = FALSE}
+ensemble_electric["target"] = y_electric
+accuracy = round(100*(ensemble_electric[ensemble_electric["ensemble"] == ensemble_electric["target"]].shape[0]/ensemble_electric.shape[0]), 2)
+
+print("Overall Accuracy = " + str(accuracy) +  "%" + "\n Run Time (sec) =  " + str(arf_el[1] + dwm_el[1] + srp_el[1]+ sam_el[1]))
+```
+
+**Table (5)** represents the accuracy plot of the ensemble method. The overall accuracy of the ensemble method is %85, which is higher than the others, except AFR. Its run time is the highest as it uses the results of state-of-art approaches.
+
+
+## For spam dataset
+
+### Adaptive Random Forest (ARF)
+
+```{python, echo = FALSE}
+arf = AdaptiveRandomForestClassifier(random_state=1, n_estimators=5)
+arf_spam = stream_classifer(X_spam, y_spam, arf, "ARF", "Spam", " (6) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(arf_spam[0])  + "%" + "\n Run Time (sec) =  " + str(arf_spam[1]))
+```
+
+The spam dataset is the most extensive dataset regarding the number of features. Therefore it takes quite a lot of run time due to expensive computations. To prevent this, the number of estimators for AFR is set to 5. This would decrease the accuracy, but it is advantageous regarding run time. **Table (6)** shows concept drifts along with the dataset. The accuracy goes within the range of 0.8 and 0.98. The overall accuracy is %92.98, and the run time is 124 seconds.
+
+
+### Streaming Agnostic Model with k-Nearest Neighbors (SAM-kNN)
+
+```{python, echo = FALSE}
+samknn = SAMKNNClassifier()
+sam_spam = stream_classifer(X_spam, y_spam, samknn, "SAM-kNN", "Spam", "(7) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(sam_spam[0])  + "%" + "\n Run Time (sec) =  " + str(sam_spam[1]))
+```
+
+SAMkNN classifier also works well in the spam dataset. The overall accuracy is %96.19. The run time is 81 seconds, which is quite promising. **Table (7)** represents the accuracy for each window. The accuracy of the ARF method drops significantly in window three; the same is true for SAMkNN. It would be a severe concept drift in the window three.
+
+### Streaming Random Patches (SRP)
+
+```{python, echo = FALSE}
+srp = StreamingRandomPatchesClassifier(random_state=1, disable_drift_detection=True, n_estimators = 3)
+srp_spam = stream_classifer(X_spam, y_spam, srp, "SRP", "Spam", "(8) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(srp_spam[0])  + "%" + "\n Run Time (sec) =  " + str(srp_spam[1]))
+```
+
+**Table (8)** shows that SRP is quite good at responding to the concept drift in window three as it does not drop significantly as in the first two methods. The run time is relatively high, which is 688 seconds. It was even higher when the number of estimators was 10 (the default number). So, it is set to 3 to prevent extended run-time. The overall accuracy is %91.0. 
+
+### Dynamic Weighted Majority (DWM)
+
+```{python, echo = FALSE}
+dwm = DynamicWeightedMajorityClassifier(base_estimator=HoeffdingTreeClassifier(), n_estimators = 3)
+dwm_spam = stream_classifer(X_spam, y_spam, dwm, "DWM", "Spam", "(9) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(dwm_spam[0])  + "%" + "\n Run Time (sec) =  " + str(dwm_spam[1]))
+```
+
+**Table (9)** shows the accuracy plot of the DWM method on the spam dataset. Its accuracy drops significantly at window 3. The DWM method is the worst one in accuracy compared to other state-of-art methods.
+
+### Ensemble Method
+
+```{python, echo = FALSE}
+data = {"samknn": sam_spam[3], "arf": arf_spam[3], "srp": srp_spam[3], "dwm": dwm_spam[3]}
+
+ensemble_dt = pd.DataFrame(data)
+
+most_occurings = ensemble_dt.mode(axis=1)
+ensemble_dt["ensemble"] = most_occurings[0]
+
+ensemble_dt["index"] = ensemble_dt.index
+
+ensemble_spam = ensemble_dt["ensemble"].to_numpy()
+
+ensemble_dt["target"] = y_spam
+ensemble_dt["result"] = 0
+ensemble_dt.loc[ensemble_dt["ensemble"] == ensemble_dt["target"], "result"] = 1
+
+num_window = len(ensemble_dt)//20
+
+my_windows = []
+for i in range(0, len(ensemble_dt), num_window):
+    my_windows.append(i)
+
+my_windows = my_windows[:-1]
+
+ensemble_dt["window"] = 0
+
+for i in range(len(my_windows)):
+    ensemble_dt.loc[ensemble_dt['index'] >= my_windows[i], 'window'] = i+1
+
+plotter = ensemble_dt.groupby("window")["result"].mean().reset_index()
+
+plt.clf()
+fig, ax = plt.subplots(figsize=((5,5)))
+ax.plot(plotter["window"], plotter["result"],
+marker="v"
+, linestyle="--"
+, color="r")
+
+
+ax.set_xticks(range(1,(1+len(plotter["result"]))))
+#ax.set_xticklabels(plotter["ensemble"])
+
+ax.set_xlabel("Window number")
+ax.set_ylabel("Accuracy")
+ax.set_title("(10) Accuracy per Window for Ensemble Method on Spam Dataset")
+
+plt.show()
+```
+
+```{python, echo = FALSE}
+ensemble_dt["target"] = y_spam
+accuracy = round(100*(ensemble_dt[ensemble_dt["ensemble"] == ensemble_dt["target"]].shape[0]/ensemble_dt.shape[0]), 2)
+
+print("Overall Accuracy = " + str(accuracy)  + "%" + "\n Run Time (sec) =  " + str(arf_spam[1] + dwm_spam[1] + srp_spam[1]+ sam_spam[1]))
+```
+
+**Table (10)** shows the accuracy plot of the ensemble method. The overall accuracy is %94.8.
+
+## For agrawal dataset
+
+### Adaptive Random Forest (ARF)
+
+```{python, echo = FALSE}
+arf = AdaptiveRandomForestClassifier(random_state=1, n_estimators=5)
+arf_agrawal = stream_classifer(X_agrawal, y_agrawal, arf, "ARF", "Agrawal", "(11) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(arf_agrawal[0])  + "%" + "\n Run Time (sec) =  " + str(arf_agrawal[1]))
+```
+
+The ARF method is quite good at classifying the agrawal dataset, as its overall accuracy is %98.94. **Table (11)** indicates that the accuracy increases when the window number increases.
+
+### Streaming Agnostic Model with k-Nearest Neighbors (SAM-kNN)
+
+```{python, echo = FALSE}
+samknn = SAMKNNClassifier()
+sam_agrawal = stream_classifer(X_agrawal, y_agrawal, samknn, "SAM-kNN", "Agrawal", "(12) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(sam_agrawal[0])  + "%" + "\n Run Time (sec) =  " + str(sam_agrawal[1]))
+```
+
+The SAM-kNN works poorly on the agrawal dataset. Its accuracy is relatively low, which is %66.26. **Table (12)** represents the accuracy plot of the SAM-kNN method on the agrawal dataset for each window.
+
+### Streaming Random Patches (SRP)
+
+```{python, echo = FALSE}
+srp = StreamingRandomPatchesClassifier(random_state=1, disable_drift_detection=True, n_estimators = 9)
+srp_agrawal = stream_classifer(X_agrawal, y_agrawal, srp, "SRP", "Agrawal", "(13) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(srp_agrawal[0])  + "%" + "\n Run Time (sec) =  " + str(srp_agrawal[1]))
+```
+
+**Table (13)** shows the accuracy plot of the SRP method on the agrawal dataset. The Overall accuracy is quite close to 100%. However, its run time is quite high.
+
+
+### Dynamic Weighted Majority (DWM)
+
+```{python, echo = FALSE}
+dwm = DynamicWeightedMajorityClassifier(base_estimator=HoeffdingTreeClassifier(), n_estimators = 9)
+dwm_agrawal = stream_classifer(X_agrawal, y_agrawal, dwm, "DWM", "Agrawal", "(14) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(dwm_agrawal[0])  + "%" + "\n Run Time (sec) =  " + str(dwm_agrawal[1]))
+```
+
+**Table (14)** represents that the DWM method predicts with nearly 100% accuracy, similar to SRP. 
+
+### Ensemble Method
+
+```{python, echo = FALSE}
+data = {"samknn": sam_agrawal[3], "arf": arf_agrawal[3], "srp": srp_agrawal[3], "dwm": dwm_agrawal[3]}
+
+ensemble_dt = pd.DataFrame(data)
+
+most_occurings = ensemble_dt.mode(axis=1)
+ensemble_dt["ensemble"] = most_occurings[0]
+
+ensemble_dt["index"] = ensemble_dt.index
+
+ensemble_agrawal = ensemble_dt["ensemble"].to_numpy()
+
+ensemble_dt["target"] = y_agrawal
+ensemble_dt["result"] = 0
+ensemble_dt.loc[ensemble_dt["ensemble"] == ensemble_dt["target"], "result"] = 1
+
+num_window = len(ensemble_dt)//20
+
+my_windows = []
+for i in range(0, len(ensemble_dt), num_window):
+    my_windows.append(i)
+
+my_windows = my_windows[:-1]
+
+ensemble_dt["window"] = 0
+
+for i in range(len(my_windows)):
+    ensemble_dt.loc[ensemble_dt['index'] >= my_windows[i], 'window'] = i+1
+
+plotter = ensemble_dt.groupby("window")["result"].mean().reset_index()
+
+plt.clf()
+fig, ax = plt.subplots(figsize=((5,5)))
+ax.plot(plotter["window"], plotter["result"],
+marker="v"
+, linestyle="--"
+, color="r")
+
+
+ax.set_xticks(range(1,(1+len(plotter["result"]))))
+#ax.set_xticklabels(plotter["ensemble"])
+
+
+ax.set_xlabel("Window number")
+ax.set_ylabel("Accuracy")
+ax.set_title("(15) Accuracy per Window for " + "Ensemble Method" + " on " + "Agrawal Dataset")
+
+plt.show()
+```
+
+```{python, echo = FALSE}
+ensemble_dt["target"] = y_agrawal
+accuracy = round(100*(ensemble_dt[ensemble_dt["ensemble"] == ensemble_dt["target"]].shape[0]/ensemble_dt.shape[0]), 2)
+
+print("Overall Accuracy = " + str(accuracy) + "%" + "\n Run Time (sec) =  " + str(arf_agrawal[1] + dwm_agrawal[1] + srp_agrawal[1]+ sam_agrawal[1]))
+```
+
+As expected, **Table (15)** shows that the ensemble method is quite promising in classifying the agrawal dataset.
+
+## For sead dataset
+
+### Adaptive Random Forest (ARF)
+
+```{python, echo = FALSE}
+arf = AdaptiveRandomForestClassifier(random_state=1, n_estimators=5)
+arf_sead = stream_classifer(X_sead, y_sead, arf, "ARF", "Sead", "(16) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(arf_sead[0])  + "%" + "\n Run Time (sec) =  " + str(arf_sead[1]))
+```
+
+**Table (16)** represents that the ARF method is quite good at capturing the target in the sead dataset with 99.37% accuracy. 
+
+### Streaming Agnostic Model with k-Nearest Neighbors (SAM-kNN)
+
+```{python, echo = FALSE}
+samknn = SAMKNNClassifier()
+sam_sead = stream_classifer(X_sead, y_sead, samknn, "SAM-kNN", "Sead", "(17) ")
+```
+  
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(sam_sead[0])  + "%" + "\n Run Time (sec) =  " + str(sam_sead[1]))
+```
+
+The SAMkNN also performs well in the sead dataset, according to **Table (17)**. Its overall accuracy is 98.21%. 
+
+### Streaming Random Patches (SRP)
+
+```{python, echo = FALSE}
+srp = StreamingRandomPatchesClassifier(random_state=1, disable_drift_detection=True, n_estimators = 3)
+srp_sead = stream_classifer(X_sead, y_sead, srp, "SRP", "Sead", "(18) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(srp_sead[0]) + "%" + "\n Run Time (sec) =  " + str(srp_sead[1]))
+```
+
+According to **Table (18)**,  the SRP method also gives promising results. Its Overall accuracy is %98.76.
+
+### Dynamic Weighted Majority (DWM)
+
+```{python, echo = FALSE}
+dwm = DynamicWeightedMajorityClassifier(base_estimator=HoeffdingTreeClassifier(), n_estimators = 5)
+dwm_sead = stream_classifer(X_sead, y_sead, dwm, "DWM", "Sead", "(19) ")
+```
+
+```{python, echo = FALSE}
+print("Overall Accuracy = " + str(dwm_sead[0]) + "%" + "\n Run Time (sec) =  " + str(dwm_sead[1]))
+```
+
+Like other methods, the DWM method performs well, as **Table (19)** represents. The overall accuracy is 98.74%.
+
+### Ensemble Method
+
+```{python, echo = FALSE}
+data = {"samknn": sam_sead[3], "arf": arf_sead[3], "srp": srp_sead[3], "dwm": dwm_sead[3]}
+
+ensemble_dt = pd.DataFrame(data)
+
+most_occurings = ensemble_dt.mode(axis=1)
+ensemble_dt["ensemble"] = most_occurings[0]
+
+ensemble_dt["index"] = ensemble_dt.index
+
+ensemble_sead = ensemble_dt["ensemble"].to_numpy()
+
+ensemble_dt["target"] = y_sead
+ensemble_dt["result"] = 0
+ensemble_dt.loc[ensemble_dt["ensemble"] == ensemble_dt["target"], "result"] = 1
+
+num_window = len(ensemble_dt)//20
+
+my_windows = []
+for i in range(0, len(ensemble_dt), num_window):
+    my_windows.append(i)
+
+my_windows = my_windows[:-1]
+
+ensemble_dt["window"] = 0
+
+for i in range(len(my_windows)):
+    ensemble_dt.loc[ensemble_dt['index'] >= my_windows[i], 'window'] = i+1
+
+plotter = ensemble_dt.groupby("window")["result"].mean().reset_index()
+
+plt.clf()
+fig, ax = plt.subplots(figsize=((5,5)))
+ax.plot(plotter["window"], plotter["result"],
+marker="v"
+, linestyle="--"
+, color="r")
+
+
+ax.set_xticks(range(1,(1+len(plotter["result"]))))
+#ax.set_xticklabels(plotter["ensemble"])
+
+
+ax.set_xlabel("Window number")
+ax.set_ylabel("Accuracy")
+ax.set_title("(20) Accuracy per Window for " + "Ensemble Method" + " on " + "Sead Dataset")
+
+plt.show()
+```
+
+```{python, echo = FALSE}
+ensemble_dt["target"] = y_sead
+accuracy = round(100*(ensemble_dt[ensemble_dt["ensemble"] == ensemble_dt["target"]].shape[0]/ensemble_dt.shape[0]), 2)
+
+print("Overall Accuracy = " + str(accuracy) + "%" + "\n Run Time (sec) =  " + str(arf_sead[1] + dwm_sead[1] + srp_sead[1]+ sam_sead[1]))
+```
+
+**Table (20)** represents the accuracy plot. The overall accuracy of the ensemble method is quite promising, which is 99.41%.
+
+# 5.1.
+
+## Question
+
+How does your ensemble model perform compared to the state-of-the-art approaches in 4.1? What 
+could be possible improvements for a more robust ensemble.
+
+## Answer
+
+In general, the accuracy of the ensemble method is higher than the state-of-art methods. The robustness of the ensemble method can be increased by increasing the number of base models. Different models can capture various variability of the dataset, and as a result, this would increase the capability of the ensemble method. Also, different concept drift algorithms can be used in the base models as each model may perform better in specific concept drift.
+
+# 5.2.
+
+## Question
+
+Discuss your findings on the accuracy plots. What is inferred from the drops in the prequential 
+accuracy plot?
+
+## Answer
+
+When there is a concept drift, there is a drop in the prequential accuracy plot. It means the model cannot continue to perform with high accuracy. To mitigate this effect,  a concept drift, DDM, is used. DDM is supposed to catch these concept drifts and make the model re-learn its parameters. So, because it updates the parameters, it is expected to increase accuracy after a while, as seen in the plots.
+
+# 5.3.
+
+## Question
+
+Please also include a paragraph that summarizes your findings in this assignment. What did you learn 
+from this assignment?
+
+## Answer
+
+In this assignment, I learned how to handle data streams where it is impossible to divide the data into train and test beforehand. I implemented five classification algorithms (ARF, SAM-kNN, SRP, DWM, and an ensemble model) with concept drift. The ensemble model, which takes the mode of the predictions from the first four models, generally outperforms the other models. We stated that the performance of the ensemble method could be improved by including different base models, using more estimators, and applying different concept drift mechanisms to base models. I analyzed the prequential accuracy plots and stated that there are indications of possible concept drifts. I concluded that concept drift decreases the performance of a model for a while. 
+
+Overall, the assignment taught me the concept of the data stream and the effect of incorporating concept drift into classification algorithms. 
+
+# OPTIONAL 2
+
+## Question
+
+Another optional part is comparison of the effectiveness of the methods using statistical tests. The 
+design and administration of these tests should be decided by you by looking at the available papers in literature.
+
+## Answer
+
+In some cases, accuracy might be misleading due to the dataset. For example, if a dataset mainly consists of one class, the model would be biased, and it might perform poorly on a balanced dataset. For example, if a dataset has only class "1", a model which always gives the output "1" will result in 100% accuracy, but this model is not a proper model. So, if the classifier is trained on an unbalanced dataset, other statistical tests, such as precision, recall, f-measure, and specificity, should be applied [4]. 
+
+So, the corresponding metrics of each model on the all datasets are provided below.
+
+```{python, echo = FALSE}
+
+targets = y_electric.tolist() + y_spam.tolist() + y_agrawal.tolist() + y_sead.tolist()
+
+
+
+pred_arf= arf_el[3].tolist() + arf_spam[3].tolist() + arf_agrawal[3].tolist() + arf_sead[3].tolist()
+pred_sam =  sam_el[3].tolist() + sam_spam[3].tolist() + sam_agrawal[3].tolist() + sam_sead[3].tolist()
+pred_srp =  srp_el[3].tolist() + srp_spam[3].tolist() + srp_agrawal[3].tolist() + srp_sead[3].tolist()
+pred_dwm =  dwm_el[3].tolist() + dwm_spam[3].tolist() + dwm_agrawal[3].tolist() + dwm_sead[3].tolist()
+pred_ensemble = pred_ens_el.tolist() + ensemble_spam.tolist() + ensemble_agrawal.tolist() + ensemble_sead.tolist()
+
+def alt_res(pred, method, results):
+  # Confusion Matrix
+  cm = confusion_matrix(results, pred)
+  print("Confusion Matrix for the:" + method)
+  print(cm)
+  
+  # Precision
+  precision = precision_score(results, pred)
+  print("Precision for the " + method + " = " + str(round(precision,2)))
+  
+  # Recall
+  recall = recall_score(results, pred)
+  print("Recall for the "+ method + " = " + str(round(recall,2)))
+  
+  # F-measure
+  f_measure = f1_score(results, pred)
+  print("F-measure for the " + method + " = " + str(round(f_measure,2)))
+  
+  # Specificity
+  specificity = cm[0, 0] / (cm[0, 0] + cm[0, 1])
+  print("Specificity for the " + method + " = " + str(round(specificity,2)))
+```
+
+```{python, echo = FALSE}
+alt_res(pred_arf,"ARF",targets)
+```
+
+```{python, echo = FALSE}
+alt_res(pred_sam,"SAMkNN",  targets)
+```
+
+```{python, echo = FALSE}
+alt_res(pred_srp, "SRP", targets)
+```
+
+```{python, echo = FALSE}
+alt_res(pred_dwm,"DWM",  targets)
+```
+
+```{python, echo = FALSE}
+alt_res(pred_ensemble,"Ensemble", targets)
+```
+
+The **ensemble model** achieved the highest precision (98%), indicating that it correctly classified a high proportion of 1's out of all the
+targets it classified as 1's. However, its recall (94.7%) was slightly lower than the ARF, SRP and DWM, indicating
+that it missed a few 1's.
+Also, the worst model is **SAMkNN** in all metrics.
+
+
+
+\newpage
+
+
+# REFERENCES
+
+[1] M. M. Gaber, "Advances in Data Stream Mining," *WIREs Data Mining and Knowledge Discovery*, vol. 2, no. 1, pp. 79-85, 2011. doi:10.1002/widm.52
+
+[2] L. Rutkowski, M. Jaworski, and P. Duda, *Stream Data Mining: Algorithms and Their Probabilistic Properties*, Cham: Springer International Publishing, 2020.
+
+[3] O. Maimon and L. Rokach, *Data Mining and Knowledge Discovery Handbook*, Springer, 2005.
+
+
+
